@@ -1,0 +1,1224 @@
+---
+title: "UK Police Stop and Search: A Study of Bias and Disproportionality"
+date: "2024-01-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is the repository where i host my code , data and a html file :https://github.com/KENZO666888/MY472-final-assignment.git
+
+## 1.Introduction
+
+This report employs data visualization techniques to investigate potential biases in stop and search practices by the UK police. The report is segmented into absolute and relative biases, aiming to determine if certain demographic groups defined by age, gender, and ethnicity are disproportionately affected. Additionally , it examines whether the UK police exhibit biases towards specific locations and times.
+*The absolute proportion referred to below refers to the proportion of a group in the group that was searched that year, and the relative proportion refers to the proportion of the group in the total population that was searched.
+
+## 2.Data Sources
+UK Police Data API: This source provides records of stop and search incidents conducted by the UK police, detailing demographic information of individuals stopped, reasons for the stops, and outcomes. For this report, over 1.44 million detailed cases from 2020-2023 (from the last census to present) were extracted using an API, with kml files for police jurisdictional boundaries to construct a model for detecting geographical biases. (https://data.police.uk/docs/method/stops-force/)
+(What needs to be noted here is that the calling range of the API started in December 2020, but in order to ensure the diversity of the data, I chose to retain the data of 2020. When relative variables such as proportions are involved below, I will use the data of 2020. But when it comes to absolute variables such as absolute numbers I will delete the data for 2020)
+
+Office for National Statistics (ONS): This source offers demographic data for the UK population, primarily from the 2021 census, detailing total population figures across various demographic categories. (https://www.ons.gov.uk/census)
+
+## 3.Data Processing
+Extraction: Data from the UK Police Data API was extracted using R scripts, targeting specific endpoints to retrieve stop and search data from 2020-2022. The 2021 census data from ONS was also extracted using R scripts.
+
+Cleaning and Aggregation: Absolute data processing involved cleaning the data to eliminate inconsistencies, standardizing formats, and aggregating to focus on key variables like age, gender, and ethnicity. The count function was utilized to ascertain the number of stop and search incidents per year and the total across 2020-2022 for various groups, subsequently determining the absolute proportion of searches for each demographic group.
+
+Relative proportion calculation: Absolute data was then compared with ONS demographic statistics. This step involved aligning demographic categories between the two datasets and establishing mapping relationships to link different variables across both tables. Calculations were made to ascertain the relative stop and search probabilities for different ethnic groups , assessing whether some groups are more likely to be stopped and searched than others.
+
+Temporal and Geographical Analysis: The data set includes mappings between geographic boundary coordinates and map data, as well as standardized 24-hour time format processing. The structure of these datasets is designed to analyze the continuous probability of being stopped and searched across different regions, times of day, and ages within the UK.
+
+## 4.Analysis
+*The source data table displayed here do not directly enter the analysis, so it is not named.
+
+This is the source table. Get uk police official website source data from API,The specific attribute information of each case will be generated here, which will be classified according to the specific attributes for the following articles.
+```{r API DATA, echo=FALSE,message=FALSE,warning=FALSE}
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(purrr)
+library(knitr)
+library(kableExtra)
+
+# Define a list of all police forces
+forces <- c("avon-and-somerset", "bedfordshire", "cambridgeshire", "cheshire", 
+            "city-of-london", "cleveland", "cumbria", "derbyshire", 
+            "devon-and-cornwall", "dorset", "durham", "essex", 
+            "gloucestershire", "greater-manchester", "hampshire", 
+            "hertfordshire", "humberside", "kent", "lancashire", 
+            "leicestershire", "lincolnshire", "merseyside", "metropolitan", 
+            "norfolk", "north-wales", "north-yorkshire", "northamptonshire", 
+            "northumbria", "nottinghamshire", "south-wales", "south-yorkshire", 
+            "staffordshire", "suffolk", "surrey", "sussex", "thames-valley", 
+            "warwickshire", "west-mercia", "west-midlands", "west-yorkshire", "wiltshire")
+
+# Function to get police force data for a specific year and month
+get_force_data_monthly <- function(year, month, force) {
+  formatted_month <- formatC(month, width = 2, format = "d", flag = "0")
+  url <- paste0("https://data.police.uk/api/stops-force?force=", force, "&date=", year, "-", formatted_month)
+  response <- GET(url)
+  if (status_code(response) == 200) {
+    data <- fromJSON(rawToChar(response$content), flatten = TRUE)
+  # Check if a data frame is returned
+    if (is.data.frame(data) && nrow(data) > 0) {
+      # Add police force name and year columns to the results
+      data$force <- force
+      data$year <- year
+      return(data)
+    }
+  }
+ # If there is no data or the request fails, return an empty data frame
+  return(data.frame(year = integer(0), force = character(0), stringsAsFactors = FALSE))
+}
+
+#Initialize an empty list to save results
+all_data <- list()
+
+# Loop through all police forces and each month to get data
+years <- 2020:2023
+for (force in forces) {
+  for (year in years) {
+    for (month in 1:12) {
+      message("Fetching data for ", force, " in ", year, "-", month)
+      monthly_data <- get_force_data_monthly(year, month, force)
+      all_data[[length(all_data) + 1]] <- monthly_data
+    }
+  }
+}
+
+# Combine all data frames in the list into one data frame
+all_data_df <- bind_rows(all_data)
+
+# View Results
+print(head(all_data_df))
+
+```
+
+Thess table import UK population distribution from a file of census data obtained from ONS.Three tables will be created here. The first table is the overall population information, which is used to analyze the relative ratio of specific groups to the total population. The second and third tables are gender information separated by men and women, which is used for gender analysis.(Because the excel format provided by the ONS official website does not conform to the format that r can directly import.We can see that the structure here is very confusing, which will be dealt with later.)
+```{r ONS DATA, echo=FALSE,message=FALSE,warning=FALSE}
+library(readxl)
+library(dplyr)
+
+# Path to the Excel file
+file_path <- "G:/LSE/final/data_final_table/uklhlsumpop18.xls"
+
+# Reading the data
+PERSONS <- read_excel(file_path, sheet = "PERSONS")
+MALES <- read_excel(file_path, sheet = "MALES")
+FEMALES <- read_excel(file_path, sheet = "FEMALES")
+
+# Define a function to convert character columns to numeric in a dataframe
+convert_to_numeric <- function(df) {
+  # Use dplyr's mutate and across functions to convert all columns except the first one
+  # (assuming it's a categorical column like age groups)
+  df <- df %>% mutate(across(-1, ~as.numeric(as.character(.))))
+  return(df)
+}
+
+# Convert the data
+PERSONS <- convert_to_numeric(PERSONS)
+MALES <- convert_to_numeric(MALES)
+FEMALES <- convert_to_numeric(FEMALES)
+
+# Print the converted data
+print(head(PERSONS))
+print(head(MALES))
+print(head(FEMALES))
+
+```
+
+# 4.1 What are the trends in the number of police stops in recent years?
+
+In the table 4.1(1) ,I summarize annual totals data based on the source data table
+```{r yearly table, echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(knitr)
+library(kableExtra)
+
+# Retrieve all the unique years present in the dataframe
+unique_years <- sort(unique(all_data_df$year))
+
+# Summarize each year to obtain the total number of cases per year
+yearly_case_totals <- all_data_df %>%
+  filter(!is.na(year)) %>%  # Remove NA values from the year column
+  group_by(year) %>%
+  summarise(total_cases = n(), .groups = 'drop')
+
+# Replace NA values with 0
+yearly_case_totals[is.na(yearly_case_totals)] <- 0
+
+kable(yearly_case_totals, "html", caption = "Table 4.1(1): Year Total Case") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(yearly_case_totals), border_left = TRUE, border_right = TRUE, color = "black")
+
+
+```
+
+In the figure 4.1(1), i make data visualization based on table 4.1(1)(Because there is only data for December in 2020, the data for 2020 is deleted here)
+
+```{r yearly picture, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(dplyr)
+
+# Filter out data for the year 2020
+filtered_data <- yearly_case_totals %>% filter(year != "2020")
+
+# Plot the graph with the filtered data
+p <- ggplot(filtered_data, aes(x = year, y = total_cases, group = 1)) +
+  geom_bar(stat = "identity", color = "black", fill = "#be8d4b", width=0.5) +  # Draw bars with black borders and filled with Morandi color
+  geom_text(aes(label = total_cases), vjust = -0.3, color = "black", size = 2.5) +  # Add numbers on top of each bar and reduce font size
+  scale_y_continuous(labels = scales::comma) +  # Format numbers with commas for readability
+  scale_x_continuous(breaks = filtered_data$year) +  # Ensure only integer years are shown on the x-axis
+  theme_minimal() +  # Apply a minimalistic theme
+  theme(
+    plot.margin = unit(c(1, 1, 1, 1), "lines"),  # Adjust the plot's margin
+    axis.title.x = element_text(vjust = -1),  # Adjust the vertical position of the x-axis title
+    plot.subtitle = element_text(hjust = 0.5, vjust = 1)  # Adjust the horizontal and vertical position of the subtitle
+  ) + 
+  labs(
+    title = "Figure 4.1 (1): Yearly Case Totals",
+    x = "Year",
+    y = "Total Cases"
+  )
+
+print(p)
+
+
+
+```
+
+# Analysis for total trend:
+
+Based on the figure 4.1 (1), the number has gradually declined since 2021, indicating that the police's willingness to search and stop is declining under the influence of policies.
+
+# 4.2 Geographical bias: Do police searches target certain areas?
+
+In table 4.2(1), we do data processing produces frequency tables broken down by geography
+```{r GEO TABLE 2, echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(kableExtra)
+
+# Group by year and force, then calculate search counts
+search_counts <- all_data_df %>%
+  group_by(year, force) %>%
+  summarise(search_count = n(), .groups = "drop")
+
+# Convert the data from long to wide format, with each force as a column
+table_force <- search_counts %>%
+  pivot_wider(names_from = force, values_from = search_count)
+
+# Ensure the 'year' column is numeric for filtering
+table_force$year <- as.numeric(as.character(table_force$year))
+
+# Filter the data for the years 2020 to 2022 and summarize searches per force
+summary_row <- table_force %>%
+  filter(year >= 2020 & year <= 2022) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE))
+
+# Convert the 'year' column in 'table_force' to character to accommodate the custom label
+table_force$year <- as.character(table_force$year)
+
+# Create the custom label for the summary row and assign it to the 'year' column
+summary_row$year <- "2020-2022"
+
+# Bind the summary row to the original data frame
+# Ensure that the 'year' column in 'summary_row' is also character for consistency
+table_force <- bind_rows(table_force, summary_row)
+table_force <- table_force %>% filter(year != "2023")
+
+# Use knitr's kable function to print the updated table with a title
+kable(table_force, "html", caption = "Table 4.2 (1): Summary of Searches by Force") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(table_force), border_left = TRUE, border_right = TRUE, color = "black")
+
+
+```
+
+In the Table 4.2(2) , we calculated the current year share of each region to analyze dynamic changes and absolute proportions
+```{r GEO TABLE, echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(tidyr)
+
+# First, calculate the total number of cases for each year
+yearly_totals <- table_force %>%
+  pivot_longer(cols = -year, names_to = "force", values_to = "cases") %>%
+  group_by(year) %>%
+  summarise(total_cases = sum(cases, na.rm = TRUE))
+
+# Then calculate the proportion of cases for each force in each year
+force_proportions <- table_force %>%
+  pivot_longer(cols = -year, names_to = "force", values_to = "cases") %>%
+  left_join(yearly_totals, by = "year") %>%
+  mutate(proportion = cases / total_cases) %>%
+  select(-total_cases, -cases)
+
+# Convert to a wide format dataframe with forces as rows and years as columns
+proportions_force_table <- force_proportions %>%
+  pivot_wider(names_from = year, values_from = proportion, id_cols = force)
+
+# Assuming that proportions_force_table is your dataframe
+# Rename the columns of the dataframe
+colnames(proportions_force_table) <- c("force", "2020", "2021", "2022", "2020-2022")
+
+kable(proportions_force_table, "html", caption = "Table 4.2(2): Proportions of Cases by Force") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(proportions_force_table), border_left = TRUE, border_right = TRUE, color = "black")
+
+```
+
+In the four pictures of Figure 4.2, we generate total and yearly pie charts to observe the dynamics of caseloads and total distribution by geography
+```{r GEO PICTURE 1, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(dplyr)
+
+# Define a function to create pie charts with specific titles aligned to the left
+plot_pie <- function(data, year_column, chart_number) {
+  # Prepare the data for the pie chart
+  pie_data <- data %>%
+    select(force, !!sym(year_column)) %>%
+    rename(proportion = !!sym(year_column)) %>%
+    mutate(label = ifelse(proportion > 0.045, paste0(force, "\n", scales::percent(proportion)), ""))
+  
+  # Create the pie chart
+  p <- ggplot(pie_data, aes(x = "", y = proportion, fill = force)) +
+    geom_bar(width = 0.1, stat = "identity", colour = "white") +
+    coord_polar("y", start = 0) +
+    geom_text(aes(label = label), position = position_stack(vjust = 0.5), size = 2.5) +
+    theme_void() +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(hjust = 0),  # Align title to the left
+      plot.title.position = "plot"  # Position the title over the plot area
+    ) +
+    labs(title = paste("Figure 4.2 (", chart_number, "):\nProportion of Cases by Force in ", year_column, sep = ""), fill = "Force")
+  
+  return(p)
+}
+
+# Retrieve the column names for years
+years <- names(proportions_force_table)[-1]
+
+# Counter for figure numbering
+figure_counter <- 1
+
+# Generate and display pie charts for each year
+for (year in years) {
+  # Draw the pie chart with a specific title
+  pie_chart <- plot_pie(proportions_force_table, year, figure_counter)
+  
+  # Display the pie chart directly
+  print(pie_chart)
+
+  # Increment the figure counter
+  figure_counter <- figure_counter + 1
+}
+
+```
+
+
+
+In the figure 4.2(5），we draw a map of the UK divided by force through the kml file, and draw the distribution of the number of cases in these areas
+```{r GEO PICTURE 2, echo=FALSE,warning=FALSE,message=FALSE}
+library(sf)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(stringr)
+
+# Set the directory for the KML files
+kml_path <- "G:/LSE/kml_file"
+
+# Read KML files
+all_kml_files <- list.files(kml_path, pattern = "\\.kml$", full.names = TRUE)
+force_boundaries <- lapply(all_kml_files, function(kml) {
+  force_name <- tools::file_path_sans_ext(basename(kml)) # Get the name of the force from the file name
+  boundary <- st_read(kml, quiet = TRUE) # Read the spatial data from KML
+  boundary$force <- force_name # Add a new column with the force name
+  return(boundary)
+}) %>% do.call(rbind, .) # Combine all the spatial data into one dataframe
+
+# Transform the coordinate system to WGS84 (EPSG: 4326)
+force_boundaries <- st_transform(force_boundaries, crs = 4326)
+
+# Merge data from proportions_force_table with the spatial data
+force_proportions <- proportions_force_table %>%
+  select(force, `2020-2022`) %>%
+  rename(proportion = `2020-2022`)
+
+force_boundaries <- merge(force_boundaries, force_proportions, by = "force")
+
+# Create a color mapping for the forces
+force_colors <- setNames(rainbow(n = nrow(proportions_force_table)), proportions_force_table$force)
+
+# Manually add the percentage for specific forces
+force_boundaries$label <- ifelse(force_boundaries$force == "metropolitan", "40.121%",
+                                 ifelse(force_boundaries$force == "merseyside", "9.816%",
+                                        ifelse(force_boundaries$force == "west midlands", "5.454%", NA)))
+
+# Calculate the centroid for each force area
+force_centers <- st_centroid(force_boundaries)
+
+# Plot the map
+ggplot(force_boundaries) +
+  geom_sf(aes(fill = force), color = "white") +  # Draw the regions
+  scale_fill_manual(values = force_colors) +  # Apply custom colors
+  geom_sf_text(
+    aes(label = ifelse(proportion > 0.005 & force != "city-of-london", paste(percent(proportion, accuracy = 0.001)), "")), 
+    data = force_centers, size = 3, check_overlap = TRUE
+  ) +  # Add percentage labels
+  geom_sf_text(
+    aes(label = label, color = "black"), data = force_centers, size = 3, check_overlap = TRUE
+  ) +  
+  scale_color_identity() +  # Allow the use of color names directly
+  theme_minimal() +
+  labs(title = "Figure 4.2(5): Police Force Boundaries and\nProportions in the UK (2020-2022)", fill = "Force",
+       caption = "*This map only displays areas with proportions greater than 0.5%") +  # Add a caption 
+  theme(
+    legend.position = "left",
+    legend.text = element_text(size = 6),
+    legend.key.size = unit(0.5, 'lines'),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank()
+  )
+
+
+
+```
+
+# Analysis for geographics:
+
+Geographically, the overall search behavior in the UK, as shown in the Figure 4.2（4）and Figure 4.2（5), seems to be concentrated in major cities or densely populated areas, especially in London (Metropolitan), with a total of 438,487 searches, far exceeding other regions. Notably, areas with proportions exceeding 0.5% are significantly concentrated around major cities, which may reflect higher crime rates or more intensive police deployment in urban areas. However, when viewed annually through the Figure 4.2(1)-Figure 4.2(3), this concentration appears to be decreasing, with the proportion in the London area dropping from 44.8% to 36.06%, while other regions show an increase.
+
+Conclusion: Big cities and surrounding cities receive bias from police
+
+# 4.3 Age bias : Do police focus on a certain age group?
+
+In the table 4.3(1), we process the source data to obtain the age distribution of the person being searched
+```{r AGE TABLE 1, echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+
+# Retrieve all the unique years present in the dataframe
+unique_years <- sort(unique(all_data_df$year))
+
+# Summarize each year by age range
+summary_by_year <- all_data_df %>%
+  group_by(year, age_range) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = year, values_from = count, values_fill = list(count = 0))
+
+# Summarize the data across all years
+summary_all_years <- all_data_df %>%
+  group_by(age_range) %>%
+  summarise(count_all_years = n(), .groups = 'drop')
+
+# Merge the total counts data with the yearly summary dataframe
+table_summary_by_age_number <- merge(summary_by_year, summary_all_years, by="age_range", all=TRUE)
+
+# Replace NA values with 0
+table_summary_by_age_number[is.na(table_summary_by_age_number)] <- 0
+
+# Ensure the last row is not empty
+table_summary_by_age_number <- table_summary_by_age_number %>%
+  slice(-n())
+  
+kable(table_summary_by_age_number, "html", caption = "Figure 4.3(1):Data_summary_by_age") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(table_summary_by_age_number), border_left = TRUE, border_right = TRUE, color = "black")
+
+
+```
+
+In the table 4.3(2), we calculate the absolute proportion using the processed age distribution data
+```{r AGE TABLE 2, echo=FALSE,message=FALSE,warning=FALSE}
+# Calculate the proportion of each age range for each year
+summary_by_age <- table_summary_by_age_number %>%
+  mutate(across(`2020`:`2023`, ~ ./ sum(.), .names = "prop_{.col}")) %>%
+  mutate(prop_count_all_years = count_all_years / sum(count_all_years))
+
+kable(summary_by_age, "html", caption = "Table 4.3(2): Absolute proportion by age") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(summary_by_age), border_left = TRUE, border_right = TRUE, color = "black")
+
+
+```
+
+In the figure 4.3(1), we draw a line chart to analyze dynamic changes of age distribution
+```{r AGE picture 1, echo=FALSE,warning=FALSE,message=FALSE}
+library(ggplot2)
+library(scales)
+library(reshape2)
+
+# Convert percentage strings to numeric values
+summary_by_age[, c("prop_2020", "prop_2021", "prop_2022", "prop_2023")] <- 
+  lapply(summary_by_age[, c("prop_2020", "prop_2021", "prop_2022", "prop_2023")], 
+         function(x) as.numeric(x))
+
+# Morandi color palette, suitable for age segments
+morandi_colors_line <- c("#640000", "#be8d4b", "#b9b8a6", "#be9f5d", "#9b8369")
+
+# Prepare data and convert the format using melt function
+melted_data_age <- melt(summary_by_age, id.vars = "age_range", 
+                        measure.vars = c("prop_2020", "prop_2021", "prop_2022", "prop_2023"))
+
+# Plot a line graph to show the change in proportions of age ranges over the years
+# Add data labels to each point
+ggplot(melted_data_age, 
+       aes(x = variable, y = value, group = age_range, color = age_range)) +
+  geom_line(size=1.5) + # Increase line thickness
+  geom_point() + # Add points
+  geom_text(aes(label = sprintf("%.2f%%", value*100)), vjust = -0.8, size = 3) + # Add data labels
+  scale_color_manual(values = morandi_colors_line) + # Apply Morandi color palette
+  theme_minimal() +
+  labs(title = "Figure 4.3(1):Percentage Change of Age Range Over Years",
+       x = "Year",
+       y = "Percentage") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 0.5)) # Ensure y-axis is between 0-100%
+
+```
+
+
+In the Figure 4.3(2), we draw a pie chart to analyze the absolute distribution of age distribution
+```{r AGE picture 2, echo=FALSE,warning=FALSE,message=FALSE}
+library(ggplot2)
+library(gridExtra)
+
+# Define Morandi color palette
+morandi_colors_donut <- c("#640000", "#be8d4b", "#b9b8a6", "#be9f5d", "#9b8369")
+
+# Create a donut chart without data labels, based on age range data
+donut_chart_age <- ggplot(summary_by_age, aes(x = 1, y = prop_count_all_years, fill = age_range)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_void() +
+  labs(title = "Figure 4.3(2): Overall Proportion of Age Range") +
+  scale_fill_manual(values = morandi_colors_donut) +
+  theme(legend.position = "right") # Position the legend on the right
+
+# Create a percentage table for each age range
+percentage_table <- round(summary_by_age$prop_count_all_years*100, 2)  # Convert fractions to rounded percentages
+names(percentage_table) <- summary_by_age$age_range
+percentage_table_df <- data.frame("Age Range" = names(percentage_table), "Percentage" = as.character(percentage_table))  # Convert to a dataframe
+
+# Create a table using tableGrob and remove row names
+percentage_table_grob <- tableGrob(percentage_table_df, rows=NULL, 
+                                   theme = ttheme_minimal(base_size = 10, padding = unit(c(2, 2), "mm")))  # Set the theme to minimize table size
+
+# Arrange the donut chart and table side by side
+grid.arrange(donut_chart_age, percentage_table_grob, ncol=1, heights = c(3, 1))  # Adjust the relative heights of the donut chart and the table
+
+
+```
+
+In the table 4.3(3), we process the ONS table to obtain the age distribution of the population
+```{r AGE table 2, echo=FALSE,message=FALSE,warning=FALSE}
+process_sheet <- function(sheet) {
+  # Remove specific rows (1, 2, 3, 4, 5, 6, 8)
+  sheet <- sheet[-c(1, 2, 3, 4, 5, 7, 32), ]
+  
+  # Set the first row of the new table as column names
+  colnames(sheet) <- as.character(unlist(sheet[1, ]))
+  sheet <- sheet[-1, ]
+  
+  # Remove any rows containing N/A
+  sheet <- sheet[!apply(sheet, 1, function(x) any(is.na(x))), ]
+
+  # Retain 'Ages' column and columns for 2020-2023
+  year_cols <- c("Ages", "2023")
+  sheet <- sheet[, (names(sheet) %in% year_cols)]
+  
+  return(sheet)
+}
+
+# Apply the processing function to the three data frames
+PERSONS_processed <- process_sheet(PERSONS)
+MALES_processed <- process_sheet(MALES)
+FEMALES_processed <- process_sheet(FEMALES)
+
+kable(PERSONS_processed, "html", caption = "Table 4.3(3): Total population per age group") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(PERSONS_processed), border_left = TRUE, border_right = TRUE, color = "black")
+
+```
+
+In the table 4.3(4) ,we establish a mapping relationship and use the average algorithm to obtain the probability of being searched for each age group.
+```{r AGE table 3, echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(purrr) 
+
+# Assuming you already have the PERSONS_processed and summary_by_age dataframes
+
+# Function to split the age range into individual years
+split_age_range <- function(age_range) {
+  if(age_range == "100 & over") {
+    return(100:100)  # Ages 100 and over
+  } else if(age_range == "under 10") {
+    return(1:9)  # Ages under 10
+  } else if(grepl("^over ", age_range)) {  # Checks if age_range starts with "over "
+    lower_bound <- as.numeric(sub("over ", "", age_range))  # Extracts the number after "over "
+    if(!is.na(lower_bound)) {
+      return((lower_bound + 1):60)  # Assumes age goes up to 60
+    }
+  } else {
+    bounds <- strsplit(age_range, "-")[[1]]
+    # Attempt to convert bounds to numbers, return error if fails
+    if(length(bounds) == 2) {
+      num_bounds <- suppressWarnings(as.numeric(bounds))
+      if(!any(is.na(num_bounds))) {
+        return(num_bounds[1]:num_bounds[2])
+      }
+    }
+  }
+  stop(paste("Cannot process age range:", age_range))
+}
+
+# Calculate the searched population for each age
+summary_by_age_expanded <- summary_by_age %>%
+  mutate(Age = map(age_range, split_age_range)) %>%
+  unnest(Age) %>%
+  group_by(Age) %>%
+  summarise(Search_2023 = sum(`2023`)/length(Age)) # Assumes equal numbers for each age
+
+# Calculate the total population for each age
+PERSONS_processed_expanded <- PERSONS_processed %>%
+  mutate(Age = map(Ages, split_age_range)) %>%
+  unnest(Age) %>%
+  group_by(Age) %>%
+  summarise(Total_2023 = sum(`2023`)/length(Age)) # Assumes equal numbers for each age
+
+# Calculate the search probability for each age
+search_probability <- summary_by_age_expanded %>%
+  left_join(PERSONS_processed_expanded, by = "Age") %>%
+  mutate(Probability = Search_2023 / (Total_2023 * 1000)) # Convert to per thousand unit
+
+kable(search_probability, "html", caption = "Table 4.3(4): Relative probability of being searched for each age group") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(search_probability), border_left = TRUE, border_right = TRUE, color = "black")
+
+```
+
+In the figure 4.3(3) ,we draw a line graph showing how the probability of being searched changes with age.
+```{r AGE picture 3, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(dplyr)
+
+# Filter out data for ages 70 and above
+search_probability_under60 <- search_probability %>% filter(Age < 60)
+
+# Use ggplot2 to plot a line graph of search probabilities for different age groups
+ggplot(search_probability_under60, aes(x = Age, y = Probability)) +
+  geom_rect(aes(xmin=16, xmax=25, ymin=0, ymax=Inf), fill="#b9b8a6", alpha=0.9) +  # Add a rectangle for the 16-25 age group
+  geom_rect(aes(xmin=44, xmax=50, ymin=0, ymax=Inf), fill="#b9b8a6", alpha=0.9) +  # Add a rectangle for the 44-50 age group
+  geom_line(size=1.5, color = "#be8d4b") + # Increase line thickness and specify color
+  geom_point(color = "#be9f5d") + # Specify color for points
+  theme_minimal() + # Apply a minimalistic theme
+  labs(title = "Figure 4.3(3): Search Probability by Age in 2023 (Under 60)",
+       x = "Age",
+       y = "Probability") +
+  scale_x_continuous(breaks = seq(0, 60, by = 2)) + # Display x-axis labels every 2 years
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) # Ensure y-axis is displayed in percentage format
+
+
+```
+# Analysis for age:
+
+Age-wise, the Figure 4.3(1) and Figure 4.3(2) indicate that the 18-24 age group is the primary target of searches, with the highest total number of searches (404,241) from 2020 -2023, accounting for 32.16%. However, there is a noticeable decline across the years in this and the 25-34 age brackets, averaging a 5% decrease, while proportions for those under 17 and over 34 have risen. The Figure 4.3(3) shows probabilities significantly higher than the average between ages 16-25 and 44-50. Excluding the broad range of 'over 34' due to lack of representativeness, it is evident that relative probabilities align with absolute probabilities
+
+Conclusion: the 18-24 age group is subject to police bias.
+
+# 4.4 Gender bias : Do police prefer to search certain genders?
+
+In figure 4.4(1), we aggregate gender information to form a data frame
+```{r GENDER TABLE 1, echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(tidyr)
+
+# Clean the data by removing rows with NA in the gender column and rename it as all_data_df_gender
+all_data_df_gender <- all_data_df %>% 
+  filter(!is.na(gender))
+
+# Retrieve all the unique years present in the dataframe
+unique_years <- sort(unique(all_data_df_gender$year))
+
+# Summarize each year by gender
+summary_by_year_gender <- all_data_df_gender %>%
+  group_by(year, gender) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = year, values_from = count, values_fill = list(count = 0))
+
+# Summarize the data across all years
+summary_all_years_gender <- all_data_df_gender %>%
+  group_by(gender) %>%
+  summarise(count_all_years = n(), .groups = 'drop')
+
+# Merge the total counts data with the yearly summary dataframe
+table_summary_by_gender <- merge(summary_by_year_gender, summary_all_years_gender, by="gender", all=TRUE)
+
+kable(table_summary_by_gender, "html", caption = "Table 4.4(1): Yearly changes in cases by gender") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(table_summary_by_gender), border_left = TRUE, border_right = TRUE, color = "black")
+
+```
+
+In Table 4.4(2), we calculate the absolute ratio of gender and add it to the data frame
+```{r GENDER TABLE 2, echo=FALSE,message=FALSE,warning=FALSE}
+
+library(dplyr)
+library(tidyr)
+
+# Assuming table_summary_by_gender is the dataframe generated from previous code
+
+# Define unique_years, containing all year column names
+unique_years <- colnames(table_summary_by_gender)[2:(ncol(table_summary_by_gender)-1)]  # Assuming the last column is count_all_years
+
+# Calculate proportions for table_summary_by_gender and add percentage signs
+summary_by_gender <- table_summary_by_gender %>%
+  mutate(across(all_of(unique_years), 
+                ~ paste0(round(100 * ./sum(.), 3), "%"), 
+                .names = "prop_{.col}")) %>%
+  mutate(prop_count_all_years = paste0(round(100 * count_all_years / sum(count_all_years), 3), "%"))
+
+kable(summary_by_gender, "html", caption = "Table 4.4(2): Absolute proportions by gender") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(summary_by_gender), border_left = TRUE, border_right = TRUE, color = "black")
+
+
+
+```
+
+In the Figure 4.4(1), we draw a dynamic line chart of the absolute probability of gender being searched year by year for dynamic analysis.
+```{r GENDER picture 1, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(scales)
+library(reshape2)
+
+# Convert percentage strings to numeric values
+summary_by_gender[, c("prop_2020", "prop_2021", "prop_2022", "prop_2023", "prop_count_all_years")] <- 
+  lapply(summary_by_gender[, c("prop_2020", "prop_2021", "prop_2022", "prop_2023", "prop_count_all_years")], 
+         function(x) as.numeric(gsub("%", "", x)))
+
+# Extended Morandi color palette for the line graph
+morandi_colors_line <- c("#640000", "#be8d4b", "#b9b8a6", "#be9f5d", "#9b8369") 
+
+# Prepare the data and convert the format using the melt function
+melted_data_gender <- melt(summary_by_gender, id.vars = "gender", 
+            measure.vars = c("prop_2020", "prop_2021", "prop_2022", "prop_2023"))
+
+# Plot a line graph to display changes in gender proportions over the years
+# Add data labels to each point
+ggplot(melted_data_gender, 
+       aes(x = variable, y = value/100, group = gender, color = gender)) +
+  geom_line(size=1.5) + # Increase line thickness
+  geom_point() + # Add points
+  geom_text(aes(label = sprintf("%.2f%%", value)), vjust = -1, size = 3) + # Add data labels with vertical position adjustment
+  scale_color_manual(values = morandi_colors_line) + # Apply Morandi color palette
+  theme_minimal() +
+  labs(title = "Figure 4.4(1): Percentage Change of Gender Over Years",
+       x = "Year",
+       y = "Percentage") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) # Ensure y-axis is between 0-100%
+
+
+
+```
+
+
+In the figure 4.4(2), we use pie charts to plot the gender distribution of the total
+```{r GENDER picture 2, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(scales)
+library(reshape2)
+library(gridExtra)
+
+# Define Morandi color palette
+morandi_colors_donut <- c("#640000", "#be8d4b", "#b9b8a6", "#be9f5d", "#9b8369")
+
+# Create a donut chart without data labels, based on gender data
+donut_chart_gender <- ggplot(summary_by_gender, aes(x = 1, y = prop_count_all_years, fill = gender)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_void() +
+  labs(title = "Figure 4.4(2):Overall Proportion of Gender") +
+  scale_fill_manual(values = morandi_colors_donut) +
+  theme(legend.position = "right") # Position the legend on the right
+
+# Create a percentage table for each gender
+percentage_table <- round(summary_by_gender$prop_count_all_years, 2)  # Convert fractions to rounded percentages
+names(percentage_table) <- summary_by_gender$gender
+percentage_table_df <- data.frame("Gender" = names(percentage_table), "Percentage" = as.character(percentage_table))  # Convert to a dataframe
+
+# Create a table using tableGrob and remove row names
+percentage_table_grob <- tableGrob(percentage_table_df, rows=NULL, 
+                                   theme = ttheme_minimal(base_size = 10, padding = unit(c(2, 2), "mm")))  # Set theme to minimize table size
+
+# Arrange the donut chart and table side by side
+grid.arrange(donut_chart_gender, percentage_table_grob, ncol=1, heights = c(3, 1))  # Adjust the relative heights of the donut chart and table
+
+```
+
+
+In the table 4.4(3) , we use ONS data to calculate the proportion of searches by gender in the total population for relative proportion analysis
+```{r GENDER TABLE 3, echo=FALSE,message=FALSE,warning=FALSE}
+# Create a processed summary dataframe for gender
+table_summary_by_gender_processed <- data.frame(
+  gender = c("Female", "Male"),
+  year_2023 = c(38705, 296265)  # Using backticks to mark the numeric column name as a string
+)
+
+# Add a total population column
+total_population <- c(34202325, 33423721)  # Adding total population numbers for both females and males
+table_summary_by_gender_processed$total_population <- total_population
+
+# Calculate the probability of being searched for each gender
+table_summary_by_gender_processed$probability <- table_summary_by_gender_processed$year_2023 / table_summary_by_gender_processed$total_population
+
+kable(table_summary_by_gender_processed, "html", caption = "Table 4.4(3): Relative proportion by gender") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(table_summary_by_gender_processed), border_left = TRUE, border_right = TRUE, color = "black")
+
+
+
+```
+
+In figure 4.4(3), we use a bar chart to observe the relative relationship between male and female gender search proportions
+```{r GENDER picture 3, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+
+# Plot a bar graph
+ggplot(table_summary_by_gender_processed, aes(x = gender, y = probability, fill = gender)) +
+  geom_bar(stat = "identity", position = position_dodge(), width = 0.3) + # Use a bar chart
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) + # Display probabilities in percentage format
+  theme_minimal() + # Apply a minimalistic theme
+  labs(title = "Figure 4.4(3): Relative search Probability by Gender",
+       x = "Gender",
+       y = "Probability") +
+  scale_fill_manual(values = c("Female" = "#FF9999", "Male" = "#9999FF")) # Assign colors for genders
+
+
+```
+
+
+# Analysis for Gender:
+
+From a gender perspective, according to the figure 4.4(1) and the figure 4.4(2) , males account for an average of 90% of search cases, though there has been a decline over three years. The the figure 4.4(3) still shows males at eight times the relative probability of females. 
+
+Conclusion: males are subjected to a higher investigative bias than females.
+
+# 4.5 Ethnicity bias : Do police prefer to search people of certain races?
+
+In Table 4.5(1), we process the source table to get the absolute number of searches for each race
+```{r Ethnicity TABLE 1, echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(tidyr)
+
+# Clean the data by removing rows with NA in the officer_defined_ethnicity column and rename it as all_data_df_ethnicity
+all_data_df_ethnicity <- all_data_df %>% 
+  filter(!is.na(officer_defined_ethnicity))
+
+# Retrieve all the unique years present in the dataframe
+unique_years <- sort(unique(all_data_df_ethnicity$year))
+
+# Summarize each year by officer_defined_ethnicity
+summary_by_year_ethnicity <- all_data_df_ethnicity %>%
+  group_by(year, officer_defined_ethnicity) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = year, values_from = count, values_fill = list(count = 0))
+
+# Summarize the data across all years
+summary_all_years_ethnicity <- all_data_df_ethnicity %>%
+  group_by(officer_defined_ethnicity) %>%
+  summarise(count_all_years = n(), .groups = 'drop')
+
+# Merge the total counts data with the yearly summary dataframe
+table_summary_by_ethnicity <- merge(summary_by_year_ethnicity, summary_all_years_ethnicity, by="officer_defined_ethnicity", all=TRUE)
+
+# Arrange the table in descending order based on total counts across all years
+table_summary_by_ethnicity <- table_summary_by_ethnicity %>%
+  arrange(desc(count_all_years))
+
+kable(table_summary_by_ethnicity, "html", caption = "Table 4.5(1): Data summary by ethnicity") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(table_summary_by_ethnicity), border_left = TRUE, border_right = TRUE, color = "black")
+
+```
+
+In Table 4.5(2), we take the calculated absolute proportions to each race and add them to the table
+```{r Ethnicity TABLE 2, echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(tidyr)
+
+# Define unique_years, which contains all the column names for the years
+unique_years <- colnames(table_summary_by_ethnicity)[2:(ncol(table_summary_by_ethnicity)-1)]  # Assuming the last column is count_all_years
+
+# Calculate proportions for table_summary_by_ethnicity and add percentage signs
+summary_by_ethnicity <- table_summary_by_ethnicity %>%
+  mutate(across(all_of(unique_years), 
+                ~ paste0(round(100 * ./sum(.), 3), "%"), 
+                .names = "prop_{.col}")) %>%
+  mutate(prop_count_all_years = paste0(round(100 * count_all_years / sum(count_all_years), 3), "%"))
+
+kable(summary_by_ethnicity, "html", caption = "Table 4.5(2):Absolute proportions by race") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(summary_by_ethnicity), border_left = TRUE, border_right = TRUE, color = "black")
+
+
+```
+
+```{r Ethnicity TABLE else, echo=FALSE,message=FALSE,warning=FALSE,include=FALSE}
+# Function to convert percentage strings to decimal format
+convert_percentage_to_decimal <- function(percent_string) {
+  as.numeric(sub("%", "", percent_string)) / 100
+}
+
+# Selecting the first and the last column and applying the conversion function
+pie_data <- summary_by_ethnicity %>%
+  select(officer_defined_ethnicity, prop_count_all_years) %>%
+  mutate(prop_count_all_years = sapply(prop_count_all_years, convert_percentage_to_decimal))
+
+kable(pie_data, "html", caption = "Table 4.5(3):Absolute proportions by race") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(pie_data), border_left = TRUE, border_right = TRUE, color = "black")
+
+```
+
+In figure 4.5(1), we draw a line chart to analyze the changes in the absolute proportion of searches of different races over the years.
+```{r Ethnicity picture 1, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(scales)
+library(reshape2)
+
+# Prepare data by converting percentage strings to numeric values
+summary_by_ethnicity[, c("prop_2020", "prop_2021", "prop_2022", "prop_2023", "prop_count_all_years")] <- 
+  lapply(summary_by_ethnicity[, c("prop_2020", "prop_2021", "prop_2022", "prop_2023", "prop_count_all_years")], 
+         function(x) as.numeric(gsub("%", "", x)))
+
+# Extended Morandi color palette adjusted for the line graph
+morandi_colors_line <- c("#640000", "#be8d4b", "#b9b8a6", "#be9f5d", "#9b8369")
+
+# Modifications for the first plot: Create a Line Graph with Morandi colors
+melted_data <- melt(summary_by_ethnicity, id.vars = "officer_defined_ethnicity", 
+            measure.vars = c("prop_2020", "prop_2021", "prop_2022", "prop_2023"))
+
+# Plot a line graph to display the changes in ethnicity proportions over the years
+ggplot(melted_data, 
+       aes(x = variable, y = value/100, group = officer_defined_ethnicity, color = officer_defined_ethnicity)) +
+  geom_line(size=1.5) + # Increase line thickness
+  geom_point() + # Add points
+  geom_text(aes(label = sprintf("%.2f%%", value)), vjust = -0.7, size = 3) + # Add data labels with vertical position adjustment
+  scale_color_manual(values = morandi_colors_line) + # Apply Morandi color palette
+  theme_minimal() +
+  labs(title = "Figure 4.5(1): Percentage Change of Ethnicity Over Years",
+       x = "Year",
+       y = "Percentage") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) # Ensure y-axis is between 0-100%
+
+
+
+```
+
+
+In the figure 4.5(2),we draw a pie chart to analyze the absolute proportion of searches for different races.
+```{r Ethnicity picture 2, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(scales)
+library(reshape2)
+library(gridExtra)
+
+# Define the Morandi color palette
+morandi_colors_donut <- c("#640000", "#be8d4b", "#b9b8a6", "#be9f5d", "#9b8369")
+
+# Create a donut chart without data labels
+donut_chart <- ggplot(pie_data, aes(x = 1, y = prop_count_all_years, fill = officer_defined_ethnicity)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  theme_void() +
+  labs(title = "Figure 4.5(2):Absolute Proportion of Ethnicity") +
+  scale_fill_manual(values = morandi_colors_donut) +
+  theme(legend.position = "right") # Place the legend on the right
+
+# Create a percentage table for each ethnicity
+percentage_table <- round(pie_data$prop_count_all_years * 100, 2)  # Convert fractions to rounded percentages
+names(percentage_table) <- pie_data$officer_defined_ethnicity
+percentage_table_df <- data.frame("Ethnicity" = names(percentage_table), "Percentage" = as.character(percentage_table))  # Convert to a dataframe
+
+# Use tableGrob to create a table and remove row names
+percentage_table_grob <- tableGrob(percentage_table_df, rows=NULL, 
+                                   theme = ttheme_minimal(base_size = 10, padding = unit(c(2, 2), "mm")))  # Set theme to minimize table size
+
+# Arrange the donut chart and table side by side
+grid.arrange(donut_chart, percentage_table_grob, ncol=1, heights = c(3, 1))  # Adjust the relative heights of the donut chart and table
+
+
+```
+
+
+In table 4.5(3),we import ONS data to obtain total population data of different ethnic groups in the UK
+```{r Ethnicity TABLE 3, echo=FALSE,message=FALSE,warning=FALSE}
+library(readxl)
+
+# Specify the file path
+file_path <- "G:/LSE/final/data_final_table/ethics.xlsx"
+
+# Read the file
+ethics_data <- read_excel(file_path)
+
+kable(ethics_data, "html", caption = "Table 4.5(3): Population data by race") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(ethics_data), border_left = TRUE, border_right = TRUE, color = "black")
+
+```
+
+In table 4.5(4), we create a mapping match between the two tables according to race names to obtain the relative search proportions of the total reference population of different races.
+```{r Ethnicity TABLE 4, echo=FALSE,message=FALSE,warning=FALSE}
+
+library(dplyr)
+
+# Remove the last two columns from ethics_data
+ethics_data <- ethics_data[, -c(4, 5)]
+  
+# Rename the columns of the table
+colnames(ethics_data) <- c("Ethnic_Group", "2011_Count", "2021_Count")
+
+# Create a dataframe for mapping ethnicity
+ethnicity_mapping <- data.frame(
+  Ethnic_Group = c(
+    "Asian, Asian British or Asian Welsh",
+    "Black, Black British, Black Welsh, Caribbean or African",
+    "Mixed or Multiple ethnic groups",
+    "White",
+    "Other ethnic group"
+  ),
+  officer_defined_ethnicity = c(
+    "Asian",
+    "Black",
+    "Mixed",
+    "White",
+    "Other"
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Select 2021 data from ethics_data
+ethics_data_2021 <- ethics_data %>%
+  select(Ethnic_Group, `2021_Count`)
+
+# Select 2021 data from summary_by_ethnicity
+summary_by_ethnicity_2021 <- summary_by_ethnicity %>%
+  select(officer_defined_ethnicity, `2021`)
+
+# Merge the two dataframes using the mapping relationship
+merged_data <- ethics_data_2021 %>%
+  left_join(ethnicity_mapping, by = "Ethnic_Group") %>%
+  left_join(summary_by_ethnicity_2021, by = "officer_defined_ethnicity")
+
+# Rename column names
+colnames(merged_data) <- c("Ethnic_Group", "Search_Count_2021", "Population_2021")
+
+# Name the resulting table as table_summary_by_ethics_processed
+table_summary_by_ethics_processed <- merged_data
+
+# Overwrite the third column with the first column
+table_summary_by_ethics_processed$Ethnic_Group <- table_summary_by_ethics_processed$Population_2021
+
+# Overwrite the fourth column with the third column
+table_summary_by_ethics_processed$Population_2021 <- as.integer(table_summary_by_ethics_processed$Population_2021)
+
+# Fill in NA values in the third column with the fourth column's data
+table_summary_by_ethics_processed$Population_2021 <- table_summary_by_ethics_processed$Population_2021.1
+
+# Rename the column names
+colnames(table_summary_by_ethics_processed)[3] <- "Search_Count_2021"
+colnames(table_summary_by_ethics_processed)[2] <- "Population_2021"
+
+# Calculate the ratio of search count to total population and add as a new column
+table_summary_by_ethics_processed$Search_to_Population_Ratio <- 
+  table_summary_by_ethics_processed$Search_Count_2021 / table_summary_by_ethics_processed$Population_2021
+
+# Arrange the table by "Search_to_Population_Ratio" in descending order
+table_summary_by_ethics_processed <- table_summary_by_ethics_processed %>%
+  arrange(desc(Search_to_Population_Ratio))
+
+kable(table_summary_by_ethics_processed, "html", caption = "Table 4.5(4): Relative proportion by race") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(table_summary_by_ethics_processed), border_left = TRUE, border_right = TRUE, color = "black")
+
+
+```
+
+In figure 4.5(3), we draw a distribution chart of the relative search rates of different races
+```{r Ethnicity picture 3, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+
+# Assuming you have the sorted table table_summary_by_ethics_processed
+
+# Create a bar chart
+plot <- ggplot(table_summary_by_ethics_processed, aes(x = reorder(Ethnic_Group, Search_to_Population_Ratio), y = Search_to_Population_Ratio)) +
+  geom_bar(stat = "identity", fill = "#be8d4b", width = 0.5) + # Use a bar chart
+  theme_minimal() + # Apply a minimal theme
+  labs(title = "Figure 4.5(3):Relative Search Probability by Ethnic Group in 2021",
+       x = "Ethnic Group",
+       y = "Search to Population Ratio") +
+  coord_flip() # Flip the coordinates to display horizontal bars
+
+# Print the chart
+print(plot)
+
+
+
+
+```
+
+# Analysis for Ethnic Group:
+
+Regarding ethnicity, referring the Figure 4.5(1) and the Figure 4.5(2), whites dominate (63.59%) with a slight increase over three years, followed by blacks (19.97%) and Asians (12.91%). However , this is mainly influenced by the significantly higher total population of whites. The Figure 4.5(3) reveals that blacks have a search probability of 4.23%, significantly higher than Asians at 1.19% and Others at 1.28%, with whites only at a 0.61% search probability.Considering the slight increase for whites, it can be deduced that bias against blacks has eased over three years. 
+
+Conclusion: blacks are subjected to higher investigative bias than other races.
+
+# 4.6 Time bias : Are police more active at certain times of the day?
+
+In table 4.6(1), we use the source data to convert the data format and summarize it into the 24-hour time distribution, and obtain the probability distribution table of searches in each hour.
+```{r Time TABLE 4, echo=FALSE,message=FALSE,warning=FALSE}
+library(dplyr)
+library(lubridate)
+
+# Remove rows where datetime column is NA and create a new dataframe
+all_data_df_datetime <- all_data_df %>% 
+  filter(!is.na(datetime)) %>%
+  mutate(hour = hour(hms(substring(datetime, 12, 19)))) # Extract the hour
+
+# Calculate the occurrence count for each hour
+hourly_counts <- all_data_df_datetime %>%
+  count(hour) %>%
+  mutate(percentage = round((n / sum(n)) * 100, 3)) # Calculate the percentage
+
+# Convert the percentage to a string and add a percentage sign
+hourly_counts <- hourly_counts %>%
+  mutate(percentage = paste0(percentage, "%"))
+
+# Update the dataframe, add a time interval column, rename the n column, and rearrange columns to put percentage last
+summary_by_time <- hourly_counts %>%
+  mutate(Time = paste0(str_pad(hour, width = 2, pad = "0"), ":00-", str_pad(hour, width = 2, pad = "0"), ":59")) %>%
+  select(-hour) %>%
+  rename(Occurrences = n) %>%
+  select(Time, Occurrences, percentage)
+
+kable(summary_by_time, "html", caption = "Table 4.6(1): Time distribution of searches (in hours) ") %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+    font_size = 12,
+    full_width = FALSE
+  ) %>%
+  row_spec(0, bold = TRUE, color = "black") %>%
+  column_spec(1:ncol(summary_by_time), border_left = TRUE, border_right = TRUE, color = "black")
+
+```
+
+In figure 4.6(1) , we use a table to draw the probability distribution of police searches for 24 hours a day
+```{r Time picture 1, echo=FALSE,message=FALSE,warning=FALSE}
+library(ggplot2)
+
+# Plot the graph
+ggplot(summary_by_time, aes(x = Time, y = Occurrences, fill = "Occurrences")) +
+  geom_bar(stat = "identity", color = "black", fill = "#be8d4b") +  # Draw a bar chart with black borders and a beige fill
+  geom_text(aes(label = Occurrences), vjust = -0.3, color = "black", size = 2.5) +  # Add numbers on each bar and reduce font size
+  theme_minimal() +  # Apply a minimalistic theme
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 10)) +  # Rotate the X-axis labels and reduce font size
+  labs(title = "Figure 4.6(1): Hourly Search Occurrences", x = "Time", y = "Occurrences") # Label the plot
+
+```
+
+
+# Analysis for time:
+Finally, the hourly frequency histogram of search cases reveals a distinct low point at 6 am, nearly ten times lower than the evening peak (3 pm-12 am, averaging 92,754 cases). There is a noticeable continuous decline from 12 am to 6 am and a corresponding rise from 6 am to 3 pm. 
+
+Conclude: police searches are more prevalent during nighttime hours.
+
+## 5.Conclusion
+In summary, the comprehensive analysis suggests that in the UK, police search practices are inclined towards young males aged 17 to 24, particularly black individuals, with this trend being particularly pronounced in the London area and during nighttime hours. Moreover, since 2021, such biased search activities have been on a gradual decline.
+
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE} 
+# this chunk generates the complete code appendix. 
+# eval=FALSE tells R not to run (``evaluate'') the code here (it was already run before).
+```

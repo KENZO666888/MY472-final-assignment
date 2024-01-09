@@ -661,6 +661,7 @@ ggplot(search_probability_under60, aes(x = Age, y = Probability)) +
 
 
 ```
+
 # Analysis for age:
 
 Age-wise, the Figure 4.3(1) and Figure 4.3(2) indicate that the 18-24 age group is the primary target of searches, with the highest total number of searches (404,241) from 2020 -2023, accounting for 32.16%. However, there is a noticeable decline across the years in this and the 25-34 age brackets, averaging a 5% decrease, while proportions for those under 17 and over 34 have risen. The Figure 4.3(3) shows probabilities significantly higher than the average between ages 16-25 and 44-50. Excluding the broad range of 'over 34' due to lack of representativeness, it is evident that relative probabilities align with absolute probabilities

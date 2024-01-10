@@ -710,9 +710,7 @@ data obtained from ONS.Three tables will be created here. The first
 table is the overall population information, which is used to analyze
 the relative ratio of specific groups to the total population. The
 second and third tables are gender information separated by men and
-women, which is used for gender analysis.(Because the excel format
-provided by the ONS official website does not conform to the format that
-r can directly import.We can see that the structure here is very
+women, which is used for gender analysis.(Because Because the data table provided by the ONS official website has many introduction lines at the beginning, it is recognized by R as empty lines.We can see that the structure here is very
 confusing, which will be dealt with later.)</p>
 <pre><code>## # A tibble: 6 × 102
 ##   Population projections…¹  ...2  ...3  ...4  ...5  ...6  ...7  ...8  ...9 ...10

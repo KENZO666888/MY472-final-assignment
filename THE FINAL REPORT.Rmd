@@ -31,10 +31,10 @@ Relative proportion calculation: Absolute data was then compared with ONS demogr
 Temporal and Geographical Analysis: The data set includes mappings between geographic boundary coordinates and map data, as well as standardized 24-hour time format processing. The structure of these datasets is designed to analyze the continuous probability of being stopped and searched across different regions, times of day, and ages within the UK.
 
 ## 4.Analysis
-*The source data table displayed here do not directly enter the analysis, so it is not named.
+*The source data table displayed here do not directly enter the analysis, so it is not named and we use head function so it will only display the first 6 rows.I will directly display the imported results without doing any processing on the data source table here to visually display my data source.
 
 UK POLICE SOURCE DATASET:
-This is the source table. Get uk police official website source data from API,The specific attribute information of each case will be generated here, which will be classified according to the specific attributes for the following articles.
+This is the source table mentioned below. Get uk police official website source data from API,The specific attribute information of each case will be generated here, which will be classified according to the specific attributes for the following articles.
 ```{r API DATA, echo=FALSE,message=FALSE,warning=FALSE}
 library(httr)
 library(jsonlite)
@@ -97,7 +97,7 @@ print(head(all_data_df))
 
 ```
 ONS DATASET:
-These 3 tables import UK population distribution from a file of census data obtained from ONS.Three tables will be created here. The first table is the overall population information, which is used to analyze the relative ratio of specific groups to the total population. The second and third tables are gender information separated by men and women, which is used for gender analysis.(Because the excel format provided by the ONS official website does not conform to the format that r can directly import.We can see that the structure here is very confusing, which will be dealt with later.)
+These 3 tables import UK population distribution from a file of census data obtained from ONS.Three tables will be created here. The first table is the overall population information, which is used to analyze the relative ratio of specific groups to the total population. The second and third tables are gender information separated by men and women, which is used for gender analysis.(Because Because the data table provided by the ONS official website has many introduction lines at the beginning, it is recognized by R as empty lines.We can see that the structure here is very confusing, which will be dealt with later.)
 ```{r ONS DATA, echo=FALSE,message=FALSE,warning=FALSE}
 library(readxl)
 library(dplyr)

@@ -2,6 +2,7 @@
 # Repository Introduction
 
 This repository contains several key files and folders that showcase my project. Here is a detailed introduction to the contents:
+All sentences marked with an asterisk (*) and those within parentheses are meant as annotations to the article and are not considered part of the main content. I did not count them in the 750-word limit. I apologize for any confusion this may have caused you.
 
 ## THE FINAL REPORT Files
 
